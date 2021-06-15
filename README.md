@@ -1,4 +1,9 @@
 ### Setup
+Initialize the mavlink submodule. This points to our fork.
+```
+git submodule update --init --recursive
+
+```
 Just change the serial port string to whatever your FTDI device instantiates as. It is currently hard coded as such:
 ```
 std::string _serial_node = "/dev/ttyUSB0";
