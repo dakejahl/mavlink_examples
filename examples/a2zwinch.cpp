@@ -109,12 +109,12 @@ int main(int argc, char* argv[])
 
             // Send heartbeat
             if (_connected) {
-                // std::cout << "sending heartbeat..." << std::endl;
+                std::cout << "sending heartbeat..." << std::endl;
                 send_message(message);
             }
         }
 
-        usleep(10000);
+        usleep(100000);
 
         // Send telemetry
         {
@@ -124,7 +124,7 @@ int main(int argc, char* argv[])
                 AUTOPILOT_SYS_ID,
                 7, // Random component ID
                 &message,
-                QGROUNDCONTROL_SYS_ID,
+                0, // QGROUNDCONTROL_SYS_ID
                 0, // Component ID 0
                 A2Z_STATE_ON_GROUND, // state
                 0.5,    // agl
