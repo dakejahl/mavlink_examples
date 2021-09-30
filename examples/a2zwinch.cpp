@@ -31,6 +31,7 @@
 
 static constexpr uint8_t QGROUNDCONTROL_SYS_ID = 255;
 static constexpr uint8_t AUTOPILOT_SYS_ID = 1;
+static constexpr uint8_t WINCH_COMP_ID = 7;
 
 #define ERROR_CONSOLE_TEXT "\033[31m" // Turn text on console red
 #define NORMAL_CONSOLE_TEXT "\033[0m" // Restore normal console colour
@@ -98,8 +99,7 @@ int main(int argc, char* argv[])
 
             mavlink_msg_heartbeat_pack(
                 AUTOPILOT_SYS_ID,
-                // MAV_COMP_ID_CAMERA,
-                7, // Random component ID
+                WINCH_COMP_ID,
                 &message,
                 7,
                 MAV_AUTOPILOT_INVALID,
@@ -114,6 +114,7 @@ int main(int argc, char* argv[])
             }
         }
 
+        // 100ms delay
         usleep(100000);
 
         // Send telemetry
@@ -122,7 +123,7 @@ int main(int argc, char* argv[])
 
             mavlink_msg_a2z_telemetry_pack(
                 AUTOPILOT_SYS_ID,
-                7, // Random component ID
+                WINCH_COMP_ID,
                 &message,
                 0, // QGROUNDCONTROL_SYS_ID
                 0, // Component ID 0
@@ -240,7 +241,6 @@ void receive()
             continue;
         }
 
-
         set_new_datagram(buffer, recv_len);
 
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
@@ -254,8 +254,7 @@ void receive()
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
                     if (!_connected) {
-                        std::cout << "Connected!" << std::endl;
-                        std::cout << "sysid: " << int(_last_message.sysid) << std::endl;
+                        std::cout << "Connected to System ID: " << int(_last_message.sysid) << std::endl;
                         _connected = true;
                         // TODO: connection timeout
                     }

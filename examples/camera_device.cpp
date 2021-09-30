@@ -225,8 +225,7 @@ void receive()
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
                     if (!_connected) {
-                        std::cout << "Connected!" << std::endl;
-                        std::cout << "sysid: " << int(_last_message.sysid) << std::endl;
+                        std::cout << "Connected to System ID: " << int(_last_message.sysid) << std::endl;
                         _connected = true;
                         // TODO: connection timeout
                     }
