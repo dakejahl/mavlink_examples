@@ -371,16 +371,47 @@ void handleCommandLong(const mavlink_message_t& message)
     mavlink_msg_command_long_decode(&message, &cmd);
 
     switch(cmd.command) {
-        case MAV_CMD_DO_A2Z:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "MAV_CMD_DO_A2Z" << NORMAL_CONSOLE_TEXT << std::endl;
-            send_command_ack_message(cmd.command);
+    case MAV_CMD_DO_A2Z:
+    {
+        std::cout << TELEMETRY_CONSOLE_TEXT << "MAV_CMD_DO_A2Z" << NORMAL_CONSOLE_TEXT << std::endl;
 
-            // Do something....
+        int command_type = static_cast<int>(cmd.param1);
 
+        switch (command_type) {
+        case A2Z_COMMAND_TYPE_DELIVER:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DELIVER" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_DROP:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DROP" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_FREEWHEEL:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_FREEWHEEL" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_LOCK:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_LOCK" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_REELDOWN:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELDOWN" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_REELUP:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELUP" << NORMAL_CONSOLE_TEXT << std::endl;
             break;
 
         default:
-            std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
+            std::cout << ERROR_CONSOLE_TEXT << "Type" << command_type << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
             break;
+        }
+
+        send_command_ack_message(cmd.command);
+        break;
+    }
+    default:
+        std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
+        break;
     }
 }

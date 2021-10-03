@@ -4,7 +4,9 @@
 # -o camera \
 # examples/camera_device.cpp
 
-g++ -std=c++11 -I c_library_v2/common -I c_library_v2/a2z \
--pthread \
--o winch_test \
-examples/a2zwinch.cpp
+# g++ -std=c++11 -I c_library_v2/common -I c_library_v2/a2z \
+# -pthread \
+# -o winch_test \
+# examples/a2zwinch.cpp
+
+cmake -Bbuild -H.; cmake --build build/
