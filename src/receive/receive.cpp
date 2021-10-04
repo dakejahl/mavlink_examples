@@ -21,7 +21,6 @@
 /* This assumes you have the mavlink headers on your include path
  or in the same folder as this source file */
 #include <mavlink.h>
-#include <a2z.h>
 
 #include <string>
 #include <iostream>
@@ -88,6 +87,8 @@ void stop()
         delete _recv_thread;
         _recv_thread = nullptr;
     }
+
+    printf("Received total: %lu\n", _received_message_count);
 
     close(_fd);
 }
@@ -267,7 +268,19 @@ void receive()
                     break;
 
                 case MAVLINK_MSG_ID_A2Z_TELEMETRY:
-                    printf("Got a2z telem message\n");
+                    // printf("Got a2z telem message\n");
+                    break;
+
+                case MAVLINK_MSG_ID_ALTITUDE:
+                    // printf("Got MAVLINK_MSG_ID_ALTITUDE\n");
+                    break;
+
+                case MAVLINK_MSG_ID_PRISM_VEHICLE_INFO:
+                    // printf("Got MAVLINK_MSG_ID_PRISM_VEHICLE_INFO\n");
+                    break;
+
+                default:
+                    printf("Got unknown message: %d\n", _last_message.msgid);
                     break;
             }
         }

@@ -21,7 +21,6 @@
 /* This assumes you have the mavlink headers on your include path
  or in the same folder as this source file */
 #include <mavlink.h>
-#include <a2z.h>
 
 #include <string>
 #include <iostream>
