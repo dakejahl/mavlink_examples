@@ -69,22 +69,7 @@ unsigned _datagram_len = 0;
 mavlink_message_t _last_message = {};
 mavlink_status_t _status = {};
 
-int32_t _image_count = 0;
-
-float sequence_counter = 0;
-
-uint64_t _last_received_heartbeat_time = 0;
-uint64_t _last_heartbeat_time = 0;
-uint64_t _last_telem_time = 0;
-
-// Constants
-static constexpr uint64_t HEARTBEAT_CONNECTION_TIMEOUT_MS = 5000; // Hz
-
-static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
-static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1 / HEARTBEAT_FREQUENCY) * 1000; // ms
-
-static constexpr int A2Z_TELEM_FREQUENCY = 50; // Hz
-static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1 / A2Z_TELEM_FREQUENCY) * 1000; // ms
+uint64_t _received_message_count = 0;
 
 void sig_handler(int signum)
 {
@@ -125,50 +110,42 @@ int main(int argc, char* argv[])
 
     usleep(10000);
 
-    printf("Waiting for connection...\n");
-
-    while (!_connected && !_should_exit) {
-        usleep(100000);
-    }
+    printf("Starting sending heartbeats\n");
 
     // Start event loop
     while (!_should_exit) {
 
         uint64_t time_now = absolute_time_ms();
 
-        if ((time_now - _last_received_heartbeat_time) > HEARTBEAT_CONNECTION_TIMEOUT_MS) {
-            printf("Connection timeout!\n");
-            stop();
-            return -1;
-        }
+
+        printf("Received messages: %lu\n", _received_message_count);
 
         send_heartbeat();
+
+        sleep(1);
     }
 }
 
 void send_heartbeat()
 {
-    auto time_now = absolute_time_ms();
+    uint64_t time_now = absolute_time_ms();
 
     // Send heartbeat
-    if ((time_now - _last_heartbeat_time) > HEARTBEAT_INTERVAL_MS) {
-        mavlink_message_t message;
+    mavlink_message_t message;
 
-        mavlink_msg_heartbeat_pack(
-            QGROUNDCONTROL_SYS_ID,
-            0,
-            &message,
-            7,
-            MAV_AUTOPILOT_INVALID,
-            0,
-            0,
-            0);
+    mavlink_msg_heartbeat_pack(
+        QGROUNDCONTROL_SYS_ID,
+        0,
+        &message,
+        MAV_COMP_ID_ALL,
+        MAV_AUTOPILOT_INVALID,
+        0,
+        0,
+        0);
 
-        // Send heartbeat
-        printf("sending heartbeat...\n");
-        send_message(message);
-        _last_heartbeat_time = absolute_time_ms();
-    }
+    // Send heartbeat
+    printf("sending heartbeat...\n");
+    send_message(message);
 }
 
 uint64_t absolute_time_ms()
@@ -217,7 +194,6 @@ bool setup_port()
     tc.c_cflag |= CLOCAL; // Without this a write() blocks indefinitely.
 
     const int baudrate = B115200;
-
 
     if (cfsetispeed(&tc, baudrate) != 0) {
         std::cout << "cfsetispeed failed: " << std::endl;
@@ -283,13 +259,15 @@ void receive()
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
 
-                    _last_received_heartbeat_time = absolute_time_ms();
-
                     if (!_connected) {
-                        std::cout << "Connected to System ID: " << int(_last_message.sysid) << std::endl;
+                        printf("Connected to System ID: %d Component ID: %d\n", _last_message.sysid, _last_message.compid);
                         _connected = true;
                     }
 
+                    break;
+
+                case MAVLINK_MSG_ID_A2Z_TELEMETRY:
+                    printf("Got a2z telem message\n");
                     break;
             }
         }
@@ -312,6 +290,7 @@ bool parse_message()
             // And decrease the length, so we don't overshoot in the next round.
             _datagram_len -= (i + 1);
             // We have parsed one message, let's return so it can be handled.
+            _received_message_count++;
             return true;
         }
     }

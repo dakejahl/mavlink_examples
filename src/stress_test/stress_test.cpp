@@ -74,20 +74,20 @@ mavlink_status_t _status = {};
 
 int32_t _image_count = 0;
 
-float sequence_counter = 0;
-
 uint64_t _last_received_heartbeat_time = 0;
 uint64_t _last_heartbeat_time = 0;
 uint64_t _last_telem_time = 0;
+
+uint64_t _sent_message_count = 0;
 
 // Constants
 static constexpr int HEARTBEAT_CONNECTION_TIMEOUT_MS = 2000; // Hz
 
 static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
-static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1 / HEARTBEAT_FREQUENCY) * 1000; // ms
+static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1.0 / HEARTBEAT_FREQUENCY) * 1000; // ms
 
-static constexpr int A2Z_TELEM_FREQUENCY = 50; // Hz
-static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1 / A2Z_TELEM_FREQUENCY) * 1000; // ms
+static constexpr int A2Z_TELEM_FREQUENCY = 2; // Hz
+static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1.0 / A2Z_TELEM_FREQUENCY) * 1000; // ms
 
 void sig_handler(int signum)
 {
@@ -135,7 +135,7 @@ int main(int argc, char* argv[])
     // Start event loop
     while (!_should_exit) {
 
-        auto time_now = absolute_time_ms();
+        uint64_t time_now = absolute_time_ms();
 
         if ((time_now - _last_received_heartbeat_time) > HEARTBEAT_CONNECTION_TIMEOUT_MS) {
             printf("Connection timeout!\n");
@@ -149,7 +149,7 @@ int main(int argc, char* argv[])
 
 void send_ready_messages()
 {
-    auto time_now = absolute_time_ms();
+    uint64_t time_now = absolute_time_ms();
 
     // Send heartbeat
     if ((time_now - _last_heartbeat_time) > HEARTBEAT_INTERVAL_MS) {
@@ -166,13 +166,16 @@ void send_ready_messages()
             0);
 
         // Send heartbeat
+        printf("Sent messages: %lu\n", _sent_message_count);
+
         printf("sending heartbeat...\n");
+
         send_message(message);
         _last_heartbeat_time = absolute_time_ms();
     }
 
     // Do we need to delay between sending messages?
-    // usleep(100000);
+    usleep(10000);
 
     // Send telemetry
     if ((time_now - _last_telem_time) > A2Z_TELEM_INTERVAL_MS) {
@@ -183,10 +186,10 @@ void send_ready_messages()
             AUTOPILOT_SYS_ID,
             WINCH_COMP_ID,
             &message,
-            0, // QGROUNDCONTROL_SYS_ID
+            QGROUNDCONTROL_SYS_ID, // QGROUNDCONTROL_SYS_ID
             0, // Component ID 0
             A2Z_STATE_ON_GROUND, // state
-            sequence_counter,    // We're going to use the AGL field as the sequence counter
+            0,
             20,     // payload_height
             3);     // payload_weight
 
@@ -194,15 +197,6 @@ void send_ready_messages()
         send_message(message);
         _last_telem_time = absolute_time_ms();
     }
-}
-
-uint64_t absolute_time_ms()
-{
-    struct timeval tv;
-    uint64_t millis = 0;
-    gettimeofday(&tv, NULL);
-    millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec * 1000);
-    return millis;
 }
 
 bool setup_port()
@@ -371,6 +365,8 @@ bool send_message(const mavlink_message_t& message)
         return false;
     }
 
+    _sent_message_count++;
+
     return true;
 }
 
@@ -452,4 +448,14 @@ void handleCommandLong(const mavlink_message_t& message)
         std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
         break;
     }
+}
+
+
+uint64_t absolute_time_ms()
+{
+    struct timeval tv;
+    uint64_t millis = 0;
+    gettimeofday(&tv, NULL);
+    millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec / 1000);
+    return millis;
 }
