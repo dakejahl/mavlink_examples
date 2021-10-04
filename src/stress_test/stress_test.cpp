@@ -38,12 +38,18 @@ static constexpr uint8_t WINCH_COMP_ID = 7;
 #define TELEMETRY_CONSOLE_TEXT "\033[34m" // Turn text on console blue
 #define SUCCESS_CONSOLE_TEXT "\033[32m" // Turn text on console blue
 
-uint64_t microsSinceEpoch();
+uint64_t absolute_time_ms();
+
+void send_ready_messages();
 bool setup_port();
-void set_new_datagram(char* datagram, unsigned datagram_len);
+
 void start_recv_thread();
-void stop();
+void receive();
 bool parse_message();
+void set_new_datagram(char* datagram, unsigned datagram_len);
+
+void stop();
+
 void send_command_ack_message(uint16_t command);
 bool send_message(const mavlink_message_t& message);
 void handleCommandLong(const mavlink_message_t& message);
@@ -68,12 +74,40 @@ mavlink_status_t _status = {};
 
 int32_t _image_count = 0;
 
+float sequence_counter = 0;
+
+uint64_t _last_received_heartbeat_time = 0;
+uint64_t _last_heartbeat_time = 0;
+uint64_t _last_telem_time = 0;
+
+// Constants
+static constexpr int HEARTBEAT_CONNECTION_TIMEOUT_MS = 2000; // Hz
+
+static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
+static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1 / HEARTBEAT_FREQUENCY) * 1000; // ms
+
+static constexpr int A2Z_TELEM_FREQUENCY = 50; // Hz
+static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1 / A2Z_TELEM_FREQUENCY) * 1000; // ms
+
 void sig_handler(int signum)
 {
     if (signum == SIGINT) {
         printf("SIGINT\n");
         stop();
     }
+}
+
+void stop()
+{
+    _should_exit = true;
+
+    if (_recv_thread) {
+        _recv_thread->join();
+        delete _recv_thread;
+        _recv_thread = nullptr;
+    }
+
+    close(_fd);
 }
 
 int main(int argc, char* argv[])
@@ -84,72 +118,91 @@ int main(int argc, char* argv[])
 
 	if (!success) {
 		printf("setup_port() failed!\n");
-		return -1 ;
+		return -1;
+
 	} else {
 		printf("setup_port() success!\n");
 	}
 
     start_recv_thread();
 
+    printf("Waiting for connection...\n");
+
+    while (!_connected && !_should_exit) {
+        usleep(100000);
+    }
+
+    // Start event loop
     while (!_should_exit) {
 
-        // Send heartbeat
-        {
-            mavlink_message_t message;
+        auto time_now = absolute_time_ms();
 
-            mavlink_msg_heartbeat_pack(
-                AUTOPILOT_SYS_ID,
-                WINCH_COMP_ID,
-                &message,
-                7,
-                MAV_AUTOPILOT_INVALID,
-                0,
-                0,
-                0);
-
-            // Send heartbeat
-            if (_connected) {
-                std::cout << "sending heartbeat..." << std::endl;
-                send_message(message);
-            }
+        if ((time_now - _last_received_heartbeat_time) > HEARTBEAT_CONNECTION_TIMEOUT_MS) {
+            printf("Connection timeout!\n");
+            stop();
+            return -1;
         }
 
-        // 100ms delay
-        usleep(100000);
-
-        // Send telemetry
-        {
-            mavlink_message_t message;
-
-            mavlink_msg_a2z_telemetry_pack(
-                AUTOPILOT_SYS_ID,
-                WINCH_COMP_ID,
-                &message,
-                0, // QGROUNDCONTROL_SYS_ID
-                0, // Component ID 0
-                A2Z_STATE_ON_GROUND, // state
-                0.5,    // agl
-                20,     // payload_height
-                3);     // payload_weight
-
-            if (_connected) {
-                std::cout << "Sending a2z telem message" << std::endl;
-                send_message(message);
-            }
-        }
-
-
-        sleep(1);
+        send_ready_messages();
     }
 }
 
-uint64_t microsSinceEpoch()
+void send_ready_messages()
 {
-	struct timeval tv;
-	uint64_t micros = 0;
-	gettimeofday(&tv, NULL);
-	micros =  ((uint64_t)tv.tv_sec) * 1000000 + tv.tv_usec;
-	return micros;
+    auto time_now = absolute_time_ms();
+
+    // Send heartbeat
+    if ((time_now - _last_heartbeat_time) > HEARTBEAT_INTERVAL_MS) {
+        mavlink_message_t message;
+
+        mavlink_msg_heartbeat_pack(
+            AUTOPILOT_SYS_ID,
+            WINCH_COMP_ID,
+            &message,
+            7,
+            MAV_AUTOPILOT_INVALID,
+            0,
+            0,
+            0);
+
+        // Send heartbeat
+        printf("sending heartbeat...\n");
+        send_message(message);
+        _last_heartbeat_time = absolute_time_ms();
+    }
+
+    // Do we need to delay between sending messages?
+    // usleep(100000);
+
+    // Send telemetry
+    if ((time_now - _last_telem_time) > A2Z_TELEM_INTERVAL_MS) {
+
+        mavlink_message_t message;
+
+        mavlink_msg_a2z_telemetry_pack(
+            AUTOPILOT_SYS_ID,
+            WINCH_COMP_ID,
+            &message,
+            0, // QGROUNDCONTROL_SYS_ID
+            0, // Component ID 0
+            A2Z_STATE_ON_GROUND, // state
+            sequence_counter,    // We're going to use the AGL field as the sequence counter
+            20,     // payload_height
+            3);     // payload_weight
+
+        std::cout << "Sending a2z telem message" << std::endl;
+        send_message(message);
+        _last_telem_time = absolute_time_ms();
+    }
+}
+
+uint64_t absolute_time_ms()
+{
+    struct timeval tv;
+    uint64_t millis = 0;
+    gettimeofday(&tv, NULL);
+    millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec * 1000);
+    return millis;
 }
 
 bool setup_port()
@@ -212,6 +265,12 @@ bool setup_port()
     return true;
 }
 
+void start_recv_thread()
+{
+    std::cout << "Starting receive thread" << std::endl;
+    _recv_thread = new std::thread(receive);
+}
+
 void receive()
 {
     std::cout << "Receive thread started!" << std::endl;
@@ -246,16 +305,16 @@ void receive()
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
 
-            if (_last_message.msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
-            }
-
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
+
+                    _last_received_heartbeat_time = absolute_time_ms();
+
                     if (!_connected) {
                         std::cout << "Connected to System ID: " << int(_last_message.sysid) << std::endl;
                         _connected = true;
-                        // TODO: connection timeout
                     }
+
                     break;
 
                 case MAVLINK_MSG_ID_COMMAND_LONG:
@@ -264,25 +323,6 @@ void receive()
             }
         }
     }
-}
-
-void start_recv_thread()
-{
-    std::cout << "Starting receive thread" << std::endl;
-    _recv_thread = new std::thread(receive);
-}
-
-void stop()
-{
-    _should_exit = true;
-
-    if (_recv_thread) {
-        _recv_thread->join();
-        delete _recv_thread;
-        _recv_thread = nullptr;
-    }
-
-    close(_fd);
 }
 
 void set_new_datagram(char* datagram, unsigned datagram_len)
@@ -313,7 +353,7 @@ bool parse_message()
 
 bool send_message(const mavlink_message_t& message)
 {
-    std::lock_guard<std::mutex> lck (_send_mutex);
+    std::lock_guard<std::mutex> lck(_send_mutex);
 
     if (_serial_node.empty()) {
         std::cout << "Dev Path unknown" << std::endl;

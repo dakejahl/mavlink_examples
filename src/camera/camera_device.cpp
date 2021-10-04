@@ -216,11 +216,6 @@ void receive()
 
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
-            // _msg_q.append(_last_message);
-            // std::cout << "Received message! \nid: " << _last_message.msgid << std::endl << std::endl;
-
-            if (_last_message.msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
-            }
 
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:

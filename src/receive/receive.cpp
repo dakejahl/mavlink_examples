@@ -31,7 +31,6 @@
 
 static constexpr uint8_t QGROUNDCONTROL_SYS_ID = 255;
 static constexpr uint8_t AUTOPILOT_SYS_ID = 1;
-static constexpr uint8_t WINCH_COMP_ID = 7;
 
 #define ERROR_CONSOLE_TEXT "\033[31m" // Turn text on console red
 #define NORMAL_CONSOLE_TEXT "\033[0m" // Restore normal console colour
@@ -40,15 +39,17 @@ static constexpr uint8_t WINCH_COMP_ID = 7;
 
 uint64_t absolute_time_ms();
 
-void send_ready_messages();
+void send_heartbeat();
 bool setup_port();
-void set_new_datagram(char* datagram, unsigned datagram_len);
+
 void start_recv_thread();
-void stop();
+void receive();
 bool parse_message();
-void send_command_ack_message(uint16_t command);
+void set_new_datagram(char* datagram, unsigned datagram_len);
+
+void stop();
+
 bool send_message(const mavlink_message_t& message);
-void handleCommandLong(const mavlink_message_t& message);
 
 //  Variables
 int _fd = -1;
@@ -77,7 +78,7 @@ uint64_t _last_heartbeat_time = 0;
 uint64_t _last_telem_time = 0;
 
 // Constants
-static constexpr int HEARTBEAT_CONNECTION_TIMEOUT_MS = 2000; // Hz
+static constexpr uint64_t HEARTBEAT_CONNECTION_TIMEOUT_MS = 5000; // Hz
 
 static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
 static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1 / HEARTBEAT_FREQUENCY) * 1000; // ms
@@ -122,6 +123,8 @@ int main(int argc, char* argv[])
 
     start_recv_thread();
 
+    usleep(10000);
+
     printf("Waiting for connection...\n");
 
     while (!_connected && !_should_exit) {
@@ -131,31 +134,29 @@ int main(int argc, char* argv[])
     // Start event loop
     while (!_should_exit) {
 
-        auto time_now = uint64_t absolute_time_ms();
+        uint64_t time_now = absolute_time_ms();
 
         if ((time_now - _last_received_heartbeat_time) > HEARTBEAT_CONNECTION_TIMEOUT_MS) {
             printf("Connection timeout!\n");
             stop();
-            return;
+            return -1;
         }
 
-        send_ready_messages();
-
-        sleep(1);
+        send_heartbeat();
     }
 }
 
-void send_ready_messages()
+void send_heartbeat()
 {
-    auto time_now = uint64_t absolute_time_ms();
+    auto time_now = absolute_time_ms();
 
     // Send heartbeat
     if ((time_now - _last_heartbeat_time) > HEARTBEAT_INTERVAL_MS) {
         mavlink_message_t message;
 
         mavlink_msg_heartbeat_pack(
-            AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
+            QGROUNDCONTROL_SYS_ID,
+            0,
             &message,
             7,
             MAV_AUTOPILOT_INVALID,
@@ -168,30 +169,6 @@ void send_ready_messages()
         send_message(message);
         _last_heartbeat_time = absolute_time_ms();
     }
-
-    // Do we need to delay between sending messages?
-    // usleep(100000);
-
-    // Send telemetry
-    if ((time_now - _last_telem_time) > A2Z_TELEM_INTERVAL_MS) {
-
-        mavlink_message_t message;
-
-        mavlink_msg_a2z_telemetry_pack(
-            AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
-            &message,
-            0, // QGROUNDCONTROL_SYS_ID
-            0, // Component ID 0
-            A2Z_STATE_ON_GROUND, // state
-            sequence_counter,    // We're going to use the AGL field as the sequence counter
-            20,     // payload_height
-            3);     // payload_weight
-
-        std::cout << "Sending a2z telem message" << std::endl;
-        send_message(message);
-        _last_telem_time = absolute_time_ms();
-    }
 }
 
 uint64_t absolute_time_ms()
@@ -199,7 +176,7 @@ uint64_t absolute_time_ms()
     struct timeval tv;
     uint64_t millis = 0;
     gettimeofday(&tv, NULL);
-    millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec * 1000);
+    millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec / 1000);
     return millis;
 }
 
@@ -302,11 +279,6 @@ void receive()
 
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
-            // _msg_q.append(_last_message);
-            // std::cout << "Received message! \nid: " << _last_message.msgid << std::endl << std::endl;
-
-            if (_last_message.msgid == MAVLINK_MSG_ID_PARAM_EXT_REQUEST_LIST) {
-            }
 
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
@@ -318,10 +290,6 @@ void receive()
                         _connected = true;
                     }
 
-                    break;
-
-                case MAVLINK_MSG_ID_COMMAND_LONG:
-                    handleCommandLong(_last_message);
                     break;
             }
         }
@@ -375,84 +343,4 @@ bool send_message(const mavlink_message_t& message)
     }
 
     return true;
-}
-
-void send_command_ack_message(uint16_t command)
-{
-    uint8_t result {};
-    uint8_t progress {};
-    int32_t result_param2 {};
-    uint8_t target_system {};
-    uint8_t target_component {};
-
-    // Fill in the data
-    result = MAV_RESULT_ACCEPTED;
-    target_system = QGROUNDCONTROL_SYS_ID;
-
-    mavlink_message_t message;
-    mavlink_msg_command_ack_pack(
-        AUTOPILOT_SYS_ID,
-        MAV_COMP_ID_CAMERA,
-        &message,
-        // Messages specific
-        command,
-        result,
-        progress,
-        result_param2,
-        target_system,
-        target_component);
-
-    send_message(message);
-}
-
-
-void handleCommandLong(const mavlink_message_t& message)
-{
-    mavlink_command_long_t cmd;
-    mavlink_msg_command_long_decode(&message, &cmd);
-
-    switch(cmd.command) {
-    case MAV_CMD_DO_A2Z:
-    {
-        std::cout << TELEMETRY_CONSOLE_TEXT << "MAV_CMD_DO_A2Z" << NORMAL_CONSOLE_TEXT << std::endl;
-
-        int command_type = static_cast<int>(cmd.param1);
-
-        switch (command_type) {
-        case A2Z_COMMAND_TYPE_DELIVER:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DELIVER" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_DROP:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DROP" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_FREEWHEEL:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_FREEWHEEL" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_LOCK:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_LOCK" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_REELDOWN:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELDOWN" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_REELUP:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELUP" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        default:
-            std::cout << ERROR_CONSOLE_TEXT << "Type" << command_type << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-        }
-
-        send_command_ack_message(cmd.command);
-        break;
-    }
-    default:
-        std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
-        break;
-    }
 }
