@@ -142,7 +142,7 @@ int main(int argc, char* argv[])
         uint64_t time_now = absolute_time_ms();
 
         // printf("Recieved messages: %lu\nAverage bitrate: %lu\x1b[A\r", _received_message_count, _avg_bitrate);
-        printf("Received messages: %lu\n", _received_message_count);
+        printf("Received messages: %lu\n\x1b[A\r", _received_message_count);
 
         send_heartbeat();
 
@@ -298,7 +298,7 @@ void receive()
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
 
-            if ((_last_message.compid == WINCH_COMP_ID) || (_last_message.compid == WINCH_COMP_ID2)) {
+            if (_last_message.msgid == MAVLINK_MSG_ID_A2Z_TELEMETRY) {
                 _received_message_count++;
             }
         }

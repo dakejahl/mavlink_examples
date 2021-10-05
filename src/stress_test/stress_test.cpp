@@ -48,7 +48,9 @@ void set_new_datagram(char* datagram, unsigned datagram_len);
 
 void stop();
 
-// void send_command_ack_message(uint16_t command);
+void send_command_ack_message(uint16_t command);
+void handle_command_long(const mavlink_message_t& message);
+
 bool send_message(const mavlink_message_t& message);
 
 void calculate_bitrate(uint16_t bytes, uint64_t time);
@@ -332,7 +334,7 @@ void receive()
                     break;
 
                 case MAVLINK_MSG_ID_COMMAND_LONG:
-                    // handleCommandLong(_last_message);
+                    handle_command_long(_last_message);
                     break;
             }
         }
@@ -387,8 +389,10 @@ bool send_message(const mavlink_message_t& message)
 
     // Message sent successfully
 
-    // Increment the message count
-    _sent_message_count++;
+    // Increment the message count only if the message is A2Z_TELEMETRY
+    if (message.msgid == MAVLINK_MSG_ID_A2Z_TELEMETRY) {
+        _sent_message_count++;
+    }
 
     uint64_t now = absolute_time_ms();
 
@@ -422,4 +426,83 @@ uint64_t absolute_time_ms()
     gettimeofday(&tv, NULL);
     millis =  ((uint64_t)tv.tv_sec) * 1000 + (tv.tv_usec / 1000);
     return millis;
+}
+
+void send_command_ack_message(uint16_t command)
+{
+    uint8_t result {};
+    uint8_t progress {};
+    int32_t result_param2 {};
+    uint8_t target_system {};
+    uint8_t target_component {};
+
+    // Fill in the data
+    result = MAV_RESULT_ACCEPTED;
+    target_system = _last_message.sysid;
+
+    mavlink_message_t message;
+    mavlink_msg_command_ack_pack(
+        AUTOPILOT_SYS_ID,
+        MAV_COMP_ID_CAMERA,
+        &message,
+        // Messages specific
+        command,
+        result,
+        progress,
+        result_param2,
+        target_system,
+        target_component);
+
+    std::cout << TELEMETRY_CONSOLE_TEXT << "send_command_ack_message" << NORMAL_CONSOLE_TEXT << std::endl;
+    send_message(message);
+}
+void handle_command_long(const mavlink_message_t& message)
+{
+    mavlink_command_long_t cmd;
+    mavlink_msg_command_long_decode(&message, &cmd);
+
+    switch(cmd.command) {
+    case MAV_CMD_DO_A2Z:
+    {
+        std::cout << TELEMETRY_CONSOLE_TEXT << "MAV_CMD_DO_A2Z" << NORMAL_CONSOLE_TEXT << std::endl;
+
+        int command_type = static_cast<int>(cmd.param1);
+
+        switch (command_type) {
+        case A2Z_COMMAND_TYPE_DELIVER:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DELIVER" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_DROP:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DROP" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_FREEWHEEL:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_FREEWHEEL" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_LOCK:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_LOCK" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_REELDOWN:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELDOWN" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        case A2Z_COMMAND_TYPE_REELUP:
+            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELUP" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+
+        default:
+            std::cout << ERROR_CONSOLE_TEXT << "Type" << command_type << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
+            break;
+        }
+
+        send_command_ack_message(cmd.command);
+        break;
+    }
+    default:
+        std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
+        break;
+    }
 }
