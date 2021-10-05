@@ -50,6 +50,8 @@ void stop();
 
 bool send_message(const mavlink_message_t& message);
 
+void calculate_bitrate(uint16_t bytes, uint64_t time);
+
 //  Variables
 int _fd = -1;
 std::string _serial_node = "/dev/ttyUSB0";
@@ -70,10 +72,16 @@ mavlink_status_t _status = {};
 
 uint64_t _received_message_count = 0;
 
+// Bandwidth calculation
+uint64_t _accumulated_bytes = 0;
+uint64_t _avg_bitrate = 0;
+uint64_t _last_bitrate_calc_time = 0;
+
+
 void sig_handler(int signum)
 {
     if (signum == SIGINT) {
-        printf("SIGINT\n");
+        printf("\n\nSIGINT\n");
         stop();
     }
 }
@@ -89,7 +97,7 @@ void stop()
     }
 
     printf("Received total: %lu\n", _received_message_count);
-
+    // printf("Average bitrate: %lu\n", _avg_bitrate);
     close(_fd);
 }
 
@@ -118,7 +126,7 @@ int main(int argc, char* argv[])
 
         uint64_t time_now = absolute_time_ms();
 
-
+        // printf("Recieved messages: %lu\nAverage bitrate: %lu\x1b[A\r", _received_message_count, _avg_bitrate);
         printf("Received messages: %lu\n", _received_message_count);
 
         send_heartbeat();
@@ -145,7 +153,7 @@ void send_heartbeat()
         0);
 
     // Send heartbeat
-    printf("sending heartbeat...\n");
+    // printf("sending heartbeat...\n");
     send_message(message);
 }
 
@@ -223,6 +231,24 @@ void start_recv_thread()
     _recv_thread = new std::thread(receive);
 }
 
+void calculate_bitrate(uint16_t bytes, uint64_t time)
+{
+    _accumulated_bytes += bytes;
+
+    uint64_t dt_ms = time - _last_bitrate_calc_time;
+
+    if (dt_ms > 100) {
+
+        float bitrate = (_accumulated_bytes * 10.0) / (dt_ms / 1000.0); // 10 bits per symbol
+
+        _avg_bitrate = (_avg_bitrate * 0.9) + (bitrate * 0.1);
+
+        // Reset
+        _accumulated_bytes = 0;
+        _last_bitrate_calc_time = time;
+    }
+}
+
 void receive()
 {
     std::cout << "Receive thread started!" << std::endl;
@@ -257,32 +283,36 @@ void receive()
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
 
-            switch (_last_message.msgid) {
-                case MAVLINK_MSG_ID_HEARTBEAT:
-
-                    if (!_connected) {
-                        printf("Connected to System ID: %d Component ID: %d\n", _last_message.sysid, _last_message.compid);
-                        _connected = true;
-                    }
-
-                    break;
-
-                case MAVLINK_MSG_ID_A2Z_TELEMETRY:
-                    // printf("Got a2z telem message\n");
-                    break;
-
-                case MAVLINK_MSG_ID_ALTITUDE:
-                    // printf("Got MAVLINK_MSG_ID_ALTITUDE\n");
-                    break;
-
-                case MAVLINK_MSG_ID_PRISM_VEHICLE_INFO:
-                    // printf("Got MAVLINK_MSG_ID_PRISM_VEHICLE_INFO\n");
-                    break;
-
-                default:
-                    printf("Got unknown message: %d\n", _last_message.msgid);
-                    break;
+            if (_last_message.compid == 7) {
+                _received_message_count++;
             }
+
+            // switch (_last_message.msgid) {
+            //     case MAVLINK_MSG_ID_HEARTBEAT:
+
+            //         if (!_connected) {
+            //             printf("Connected to System ID: %d Component ID: %d\n", _last_message.sysid, _last_message.compid);
+            //             _connected = true;
+            //         }
+
+            //         break;
+
+            //     case MAVLINK_MSG_ID_A2Z_TELEMETRY:
+            //         // printf("Got a2z telem message\n");
+            //         break;
+
+            //     case MAVLINK_MSG_ID_ALTITUDE:
+            //         // printf("Got MAVLINK_MSG_ID_ALTITUDE\n");
+            //         break;
+
+            //     case MAVLINK_MSG_ID_PRISM_VEHICLE_INFO:
+            //         // printf("Got MAVLINK_MSG_ID_PRISM_VEHICLE_INFO\n");
+            //         break;
+
+            //     default:
+            //         printf("Got unknown message: %d\n", _last_message.msgid);
+            //         break;
+            // }
         }
     }
 }
@@ -303,7 +333,12 @@ bool parse_message()
             // And decrease the length, so we don't overshoot in the next round.
             _datagram_len -= (i + 1);
             // We have parsed one message, let's return so it can be handled.
-            _received_message_count++;
+
+            // _received_message_count++;
+
+            // Bandwidth calculation
+            // calculate_bitrate((uint16_t)i, absolute_time_ms());
+
             return true;
         }
     }

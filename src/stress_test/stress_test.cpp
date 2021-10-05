@@ -63,7 +63,7 @@ std::mutex _send_mutex;
 std::thread* _recv_thread = nullptr;
 std::queue<mavlink_message_t> _msg_q;
 
-bool _should_exit = false;
+volatile bool _should_exit = false;
 bool _connected = false;
 
 uint8_t _channel = 0;
@@ -86,34 +86,31 @@ uint64_t _sent_message_count = 0;
 
 // Bandwidth calculation
 uint64_t _accumulated_bytes = 0;
-float _avg_bitrate = 0;
-float _avg_buf[10] = {};
-int _avg_buf_index = 0;
-uint64_t _last_msg_send_time = 0;
+uint64_t _avg_bitrate = 0;
 uint64_t _last_bitrate_calc_time = 0;
 
 // Constants
 
 static constexpr int HEARTBEAT_CONNECTION_TIMEOUT_MS = 2000;
 
-static constexpr int BLAST_ALL_MESSAGES = 100; // Hz
+// static constexpr int BLAST_ALL_MESSAGES = 5; // Hz
 
-static constexpr int HEARTBEAT_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
+static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
 static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1.0 / HEARTBEAT_FREQUENCY) * 1000; // ms
 
-static constexpr int A2Z_TELEM_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
+static constexpr int A2Z_TELEM_FREQUENCY = 50; // Hz
 static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1.0 / A2Z_TELEM_FREQUENCY) * 1000; // ms
 
-static constexpr int ALTITUDE_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
-static constexpr uint64_t ALTITUDE_INTERVAL_MS = (1.0 / ALTITUDE_FREQUENCY) * 1000; // ms
+// static constexpr int ALTITUDE_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
+// static constexpr uint64_t ALTITUDE_INTERVAL_MS = (1.0 / ALTITUDE_FREQUENCY) * 1000; // ms
 
-static constexpr int PRISM_VEHCILE_INFO_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
-static constexpr uint64_t PRISM_VEHCILE_INFO_INTERVAL_MS = (1.0 / PRISM_VEHCILE_INFO_FREQUENCY) * 1000; // ms
+// static constexpr int PRISM_VEHCILE_INFO_FREQUENCY = 3; // Hz
+// static constexpr uint64_t PRISM_VEHCILE_INFO_INTERVAL_MS = (1.0 / PRISM_VEHCILE_INFO_FREQUENCY) * 1000; // ms
 
 void sig_handler(int signum)
 {
     if (signum == SIGINT) {
-        printf("SIGINT\n");
+        printf("\n\nSIGINT\n");
         stop();
     }
 }
@@ -129,6 +126,7 @@ void stop()
     }
 
     printf("Sent total: %lu\n", _sent_message_count);
+    printf("Average bitrate: %lu\n", _avg_bitrate);
 
     close(_fd);
 }
@@ -152,7 +150,7 @@ int main(int argc, char* argv[])
     printf("Waiting for connection...\n");
 
     while (!_connected && !_should_exit) {
-        usleep(100000);
+        usleep(500000);
     }
 
     // Start event loop
@@ -189,10 +187,11 @@ void send_ready_messages()
             0);
 
         // Send heartbeat
-        printf("Sent messages: %lu\n", _sent_message_count);
-        printf("Average bitrate: %.2f\n", (double)_avg_bitrate);
+        printf("Sent messages: %lu\nAverage bitrate: %lu\x1b[A\r", _sent_message_count, _avg_bitrate);
 
-        printf("sending heartbeat...\n");
+        // printf("Average bitrate: %lu", _avg_bitrate);
+
+        // printf("sending heartbeat...\n");
 
         send_message(message);
         _last_heartbeat_time = absolute_time_ms();
@@ -201,26 +200,26 @@ void send_ready_messages()
     // Do we need to delay between sending messages?
     // usleep(100000);
 
-    if ((time_now - _last_alt_time) > ALTITUDE_INTERVAL_MS) {
+    // if ((time_now - _last_alt_time) > ALTITUDE_INTERVAL_MS) {
 
-        mavlink_message_t message;
+    //     mavlink_message_t message;
 
-        mavlink_msg_altitude_pack(
-            AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
-            &message,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0);
+    //     mavlink_msg_altitude_pack(
+    //         AUTOPILOT_SYS_ID,
+    //         WINCH_COMP_ID,
+    //         &message,
+    //         0,
+    //         0,
+    //         0,
+    //         0,
+    //         0,
+    //         0,
+    //         0);
 
-        // std::cout << "Sending alt message" << std::endl;
-        send_message(message);
-        _last_alt_time = absolute_time_ms();
-    }
+    //     // std::cout << "Sending alt message" << std::endl;
+    //     send_message(message);
+    //     _last_alt_time = absolute_time_ms();
+    // }
 
     // Send telemetry
     if ((time_now - _last_telem_time) > A2Z_TELEM_INTERVAL_MS) {
@@ -238,29 +237,29 @@ void send_ready_messages()
             20,     // payload_height
             3);     // payload_weight
 
-        std::cout << "Sending a2z telem message" << std::endl;
+        // std::cout << "Sending a2z telem message" << std::endl;
         send_message(message);
         _last_telem_time = absolute_time_ms();
     }
 
     // Send watts
-    if ((time_now - _last_watts_time) > PRISM_VEHCILE_INFO_INTERVAL_MS) {
+    // if ((time_now - _last_watts_time) > PRISM_VEHCILE_INFO_INTERVAL_MS) {
 
-        mavlink_message_t message;
+    //     mavlink_message_t message;
 
-        mavlink_msg_prism_vehicle_info_pack(
-            AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
-            &message,
-            QGROUNDCONTROL_SYS_ID,
-            0,
-            0,
-            0);
+    //     mavlink_msg_prism_vehicle_info_pack(
+    //         AUTOPILOT_SYS_ID,
+    //         WINCH_COMP_ID,
+    //         &message,
+    //         QGROUNDCONTROL_SYS_ID,
+    //         0,
+    //         0,
+    //         0);
 
-        std::cout << "Sending watts message" << std::endl;
-        send_message(message);
-        _last_watts_time = absolute_time_ms();
-    }
+    //     // std::cout << "Sending watts message" << std::endl;
+    //     send_message(message);
+    //     _last_watts_time = absolute_time_ms();
+    // }
 }
 
 bool setup_port()
@@ -299,16 +298,16 @@ bool setup_port()
 
     tc.c_cflag |= CLOCAL; // Without this a write() blocks indefinitely.
 
-    const int baudrate = B115200;
+    const int bitrate = B115200;
 
 
-    if (cfsetispeed(&tc, baudrate) != 0) {
+    if (cfsetispeed(&tc, bitrate) != 0) {
         std::cout << "cfsetispeed failed: " << std::endl;
         close(_fd);
         return false;
     }
 
-    if (cfsetospeed(&tc, baudrate) != 0) {
+    if (cfsetospeed(&tc, bitrate) != 0) {
         std::cout << "cfsetospeed failed: " << std::endl;
         close(_fd);
         return false;
@@ -438,8 +437,6 @@ bool send_message(const mavlink_message_t& message)
 
     calculate_bitrate(buffer_len, now);
 
-    _last_msg_send_time = now;
-
     return true;
 }
 
@@ -447,48 +444,19 @@ void calculate_bitrate(uint16_t bytes, uint64_t time)
 {
     _accumulated_bytes += bytes;
 
-    // Three second interval
-    if ((time - _last_bitrate_calc_time) > 3000) {
+    uint64_t dt_ms = time - _last_bitrate_calc_time;
 
-        _avg_bitrate = _accumulated_bytes * 10;
+    if (dt_ms > 500) {
+
+        float bitrate = (_accumulated_bytes * 10.0) / (dt_ms / 1000.0); // 10 bits per symbol
+
+        _avg_bitrate = (_avg_bitrate * 0.5) + (bitrate * 0.5);
 
         // Reset
         _accumulated_bytes = 0;
         _last_bitrate_calc_time = time;
     }
 }
-
-// float calculate_bitrate(uint16_t bytes, uint64_t time)
-// {
-//     // Calculate the TX bit rate
-//     static constexpr int bits_per_byte = 10; // 10 bits per byte for serial
-
-//     uint64_t dt_ms = time - _last_msg_send_time;
-
-//     printf("dt_ms: %lu\n", dt_ms);
-
-
-//     float bits = bits_per_byte * bytes;
-//     float bits_per_second = (float)bits / (float)(dt_ms / 1000);
-
-//     printf("bits_per_second: %d\n", (double)bits_per_second);
-
-//     _avg_buf[_avg_buf_index] = bits_per_second;
-
-//     if (_avg_buf_index == sizeof(_avg_buf) - 1) {
-//         _avg_buf_index = 0;
-//     }
-
-//     float bps_avg = 0;
-
-//     for (size_t i = 0; i < sizeof(_avg_buf); i++) {
-//         bps_avg += _avg_buf[_avg_buf_index];
-//     }
-
-//     bps_avg /= sizeof(_avg_buf);
-
-//     return bps_avg;
-// }
 
 void send_command_ack_message(uint16_t command)
 {
