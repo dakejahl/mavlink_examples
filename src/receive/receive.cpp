@@ -28,8 +28,9 @@
 #include <thread>
 #include <mutex>
 
-static constexpr uint8_t QGROUNDCONTROL_SYS_ID = 255;
 static constexpr uint8_t AUTOPILOT_SYS_ID = 1;
+static constexpr uint8_t WINCH_COMP_ID = 7;
+static constexpr uint8_t WINCH_COMP_ID2 = 8;
 
 #define ERROR_CONSOLE_TEXT "\033[31m" // Turn text on console red
 #define NORMAL_CONSOLE_TEXT "\033[0m" // Restore normal console colour
@@ -54,7 +55,6 @@ void calculate_bitrate(uint16_t bytes, uint64_t time);
 
 //  Variables
 int _fd = -1;
-std::string _serial_node = "/dev/ttyUSB0";
 
 std::mutex _send_mutex;
 std::thread* _recv_thread = nullptr;
@@ -77,6 +77,9 @@ uint64_t _accumulated_bytes = 0;
 uint64_t _avg_bitrate = 0;
 uint64_t _last_bitrate_calc_time = 0;
 
+// Program args
+std::string _serial_path = "/dev/ttyUSB0";
+int _mav_comp_id = 0;
 
 void sig_handler(int signum)
 {
@@ -103,6 +106,18 @@ void stop()
 
 int main(int argc, char* argv[])
 {
+    if (argc > 2) {
+
+        _serial_path = std::string(argv[1]);
+
+        _mav_comp_id = atoi(argv[2]);
+        printf("Starting on %s as Component ID: %d\n", _serial_path.c_str(), _mav_comp_id);
+
+    } else {
+        printf("USB path and Component ID required!\n");
+        return -1;
+    }
+
     signal(SIGINT,sig_handler); // Register signal handler
 
 	bool success = setup_port();
@@ -143,10 +158,10 @@ void send_heartbeat()
     mavlink_message_t message;
 
     mavlink_msg_heartbeat_pack(
-        QGROUNDCONTROL_SYS_ID,
-        0,
+        AUTOPILOT_SYS_ID,
+        MAV_COMP_ID_USER1, // Companion computer
         &message,
-        MAV_COMP_ID_ALL,
+        MAV_COMP_ID_USER1,
         MAV_AUTOPILOT_INVALID,
         0,
         0,
@@ -169,7 +184,7 @@ uint64_t absolute_time_ms()
 bool setup_port()
 {
     // open() hangs on macOS or Linux devices(e.g. pocket beagle) unless you give it O_NONBLOCK
-    _fd = open(_serial_node.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    _fd = open(_serial_path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (_fd == -1) {
         std::cout << "open failed: " << std::endl;
         return false;
@@ -283,36 +298,9 @@ void receive()
         // Parse all mavlink messages in one data packet. Once exhausted, we'll exit while.
         while (parse_message()) {
 
-            if (_last_message.compid == 7) {
+            if ((_last_message.compid == WINCH_COMP_ID) || (_last_message.compid == WINCH_COMP_ID2)) {
                 _received_message_count++;
             }
-
-            // switch (_last_message.msgid) {
-            //     case MAVLINK_MSG_ID_HEARTBEAT:
-
-            //         if (!_connected) {
-            //             printf("Connected to System ID: %d Component ID: %d\n", _last_message.sysid, _last_message.compid);
-            //             _connected = true;
-            //         }
-
-            //         break;
-
-            //     case MAVLINK_MSG_ID_A2Z_TELEMETRY:
-            //         // printf("Got a2z telem message\n");
-            //         break;
-
-            //     case MAVLINK_MSG_ID_ALTITUDE:
-            //         // printf("Got MAVLINK_MSG_ID_ALTITUDE\n");
-            //         break;
-
-            //     case MAVLINK_MSG_ID_PRISM_VEHICLE_INFO:
-            //         // printf("Got MAVLINK_MSG_ID_PRISM_VEHICLE_INFO\n");
-            //         break;
-
-            //     default:
-            //         printf("Got unknown message: %d\n", _last_message.msgid);
-            //         break;
-            // }
         }
     }
 }
@@ -353,7 +341,7 @@ bool send_message(const mavlink_message_t& message)
 {
     std::lock_guard<std::mutex> lck(_send_mutex);
 
-    if (_serial_node.empty()) {
+    if (_serial_path.empty()) {
         std::cout << "Dev Path unknown" << std::endl;
         return false;
     }

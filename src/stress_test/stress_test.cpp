@@ -28,7 +28,6 @@
 #include <thread>
 #include <mutex>
 
-static constexpr uint8_t QGROUNDCONTROL_SYS_ID = 255;
 static constexpr uint8_t AUTOPILOT_SYS_ID = 1;
 static constexpr uint8_t WINCH_COMP_ID = 7;
 
@@ -49,15 +48,14 @@ void set_new_datagram(char* datagram, unsigned datagram_len);
 
 void stop();
 
-void send_command_ack_message(uint16_t command);
+// void send_command_ack_message(uint16_t command);
 bool send_message(const mavlink_message_t& message);
-void handleCommandLong(const mavlink_message_t& message);
 
 void calculate_bitrate(uint16_t bytes, uint64_t time);
 
 //  Variables
 int _fd = -1;
-std::string _serial_node = "/dev/ttyUSB0";
+std::string _serial_path = "/dev/ttyUSB0";
 
 std::mutex _send_mutex;
 std::thread* _recv_thread = nullptr;
@@ -78,34 +76,24 @@ int32_t _image_count = 0;
 uint64_t _last_received_heartbeat_time = 0;
 uint64_t _last_heartbeat_time = 0;
 uint64_t _last_telem_time = 0;
-uint64_t _last_alt_time = 0;
-uint64_t _last_watts_time = 0;
 
 uint64_t _sent_message_count = 0;
-
 
 // Bandwidth calculation
 uint64_t _accumulated_bytes = 0;
 uint64_t _avg_bitrate = 0;
 uint64_t _last_bitrate_calc_time = 0;
 
+int _mav_comp_id = 0;
+
 // Constants
-
 static constexpr int HEARTBEAT_CONNECTION_TIMEOUT_MS = 2000;
-
-// static constexpr int BLAST_ALL_MESSAGES = 5; // Hz
 
 static constexpr int HEARTBEAT_FREQUENCY = 1; // Hz
 static constexpr uint64_t HEARTBEAT_INTERVAL_MS = (1.0 / HEARTBEAT_FREQUENCY) * 1000; // ms
 
 static constexpr int A2Z_TELEM_FREQUENCY = 50; // Hz
 static constexpr uint64_t A2Z_TELEM_INTERVAL_MS = (1.0 / A2Z_TELEM_FREQUENCY) * 1000; // ms
-
-// static constexpr int ALTITUDE_FREQUENCY = BLAST_ALL_MESSAGES; // Hz
-// static constexpr uint64_t ALTITUDE_INTERVAL_MS = (1.0 / ALTITUDE_FREQUENCY) * 1000; // ms
-
-// static constexpr int PRISM_VEHCILE_INFO_FREQUENCY = 3; // Hz
-// static constexpr uint64_t PRISM_VEHCILE_INFO_INTERVAL_MS = (1.0 / PRISM_VEHCILE_INFO_FREQUENCY) * 1000; // ms
 
 void sig_handler(int signum)
 {
@@ -133,6 +121,18 @@ void stop()
 
 int main(int argc, char* argv[])
 {
+    if (argc > 2) {
+
+        _serial_path = std::string(argv[1]);
+
+        _mav_comp_id = atoi(argv[2]);
+        printf("Starting on %s as Component ID: %d\n", _serial_path.c_str(), _mav_comp_id);
+
+    } else {
+        printf("USB path and Component ID required!\n");
+        return -1;
+    }
+
     signal(SIGINT,sig_handler); // Register signal handler
 
 	bool success = setup_port();
@@ -178,9 +178,9 @@ void send_ready_messages()
 
         mavlink_msg_heartbeat_pack(
             AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
+            _mav_comp_id,
             &message,
-            7,
+            _mav_comp_id,
             MAV_AUTOPILOT_INVALID,
             0,
             0,
@@ -197,30 +197,6 @@ void send_ready_messages()
         _last_heartbeat_time = absolute_time_ms();
     }
 
-    // Do we need to delay between sending messages?
-    // usleep(100000);
-
-    // if ((time_now - _last_alt_time) > ALTITUDE_INTERVAL_MS) {
-
-    //     mavlink_message_t message;
-
-    //     mavlink_msg_altitude_pack(
-    //         AUTOPILOT_SYS_ID,
-    //         WINCH_COMP_ID,
-    //         &message,
-    //         0,
-    //         0,
-    //         0,
-    //         0,
-    //         0,
-    //         0,
-    //         0);
-
-    //     // std::cout << "Sending alt message" << std::endl;
-    //     send_message(message);
-    //     _last_alt_time = absolute_time_ms();
-    // }
-
     // Send telemetry
     if ((time_now - _last_telem_time) > A2Z_TELEM_INTERVAL_MS) {
 
@@ -228,10 +204,10 @@ void send_ready_messages()
 
         mavlink_msg_a2z_telemetry_pack(
             AUTOPILOT_SYS_ID,
-            WINCH_COMP_ID,
+            _mav_comp_id,
             &message,
-            QGROUNDCONTROL_SYS_ID, // QGROUNDCONTROL_SYS_ID
-            0, // Component ID 0
+            0,      // broadcast
+            0,
             A2Z_STATE_ON_GROUND, // state
             0,
             20,     // payload_height
@@ -241,31 +217,12 @@ void send_ready_messages()
         send_message(message);
         _last_telem_time = absolute_time_ms();
     }
-
-    // Send watts
-    // if ((time_now - _last_watts_time) > PRISM_VEHCILE_INFO_INTERVAL_MS) {
-
-    //     mavlink_message_t message;
-
-    //     mavlink_msg_prism_vehicle_info_pack(
-    //         AUTOPILOT_SYS_ID,
-    //         WINCH_COMP_ID,
-    //         &message,
-    //         QGROUNDCONTROL_SYS_ID,
-    //         0,
-    //         0,
-    //         0);
-
-    //     // std::cout << "Sending watts message" << std::endl;
-    //     send_message(message);
-    //     _last_watts_time = absolute_time_ms();
-    // }
 }
 
 bool setup_port()
 {
     // open() hangs on macOS or Linux devices(e.g. pocket beagle) unless you give it O_NONBLOCK
-    _fd = open(_serial_node.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    _fd = open(_serial_path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (_fd == -1) {
         std::cout << "open failed: " << std::endl;
         return false;
@@ -375,7 +332,7 @@ void receive()
                     break;
 
                 case MAVLINK_MSG_ID_COMMAND_LONG:
-                    handleCommandLong(_last_message);
+                    // handleCommandLong(_last_message);
                     break;
             }
         }
@@ -412,7 +369,7 @@ bool send_message(const mavlink_message_t& message)
 {
     std::lock_guard<std::mutex> lck(_send_mutex);
 
-    if (_serial_node.empty()) {
+    if (_serial_path.empty()) {
         std::cout << "Dev Path unknown" << std::endl;
         return false;
     }
@@ -457,87 +414,6 @@ void calculate_bitrate(uint16_t bytes, uint64_t time)
         _last_bitrate_calc_time = time;
     }
 }
-
-void send_command_ack_message(uint16_t command)
-{
-    uint8_t result {};
-    uint8_t progress {};
-    int32_t result_param2 {};
-    uint8_t target_system {};
-    uint8_t target_component {};
-
-    // Fill in the data
-    result = MAV_RESULT_ACCEPTED;
-    target_system = QGROUNDCONTROL_SYS_ID;
-
-    mavlink_message_t message;
-    mavlink_msg_command_ack_pack(
-        AUTOPILOT_SYS_ID,
-        MAV_COMP_ID_CAMERA,
-        &message,
-        // Messages specific
-        command,
-        result,
-        progress,
-        result_param2,
-        target_system,
-        target_component);
-
-    send_message(message);
-}
-
-
-void handleCommandLong(const mavlink_message_t& message)
-{
-    mavlink_command_long_t cmd;
-    mavlink_msg_command_long_decode(&message, &cmd);
-
-    switch(cmd.command) {
-    case MAV_CMD_DO_A2Z:
-    {
-        std::cout << TELEMETRY_CONSOLE_TEXT << "MAV_CMD_DO_A2Z" << NORMAL_CONSOLE_TEXT << std::endl;
-
-        int command_type = static_cast<int>(cmd.param1);
-
-        switch (command_type) {
-        case A2Z_COMMAND_TYPE_DELIVER:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DELIVER" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_DROP:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_DROP" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_FREEWHEEL:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_FREEWHEEL" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_LOCK:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_LOCK" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_REELDOWN:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELDOWN" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        case A2Z_COMMAND_TYPE_REELUP:
-            std::cout << TELEMETRY_CONSOLE_TEXT << "A2Z_COMMAND_TYPE_REELUP" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-
-        default:
-            std::cout << ERROR_CONSOLE_TEXT << "Type" << command_type << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
-            break;
-        }
-
-        send_command_ack_message(cmd.command);
-        break;
-    }
-    default:
-        std::cout << ERROR_CONSOLE_TEXT << "Command " << cmd.command << " not supported" << NORMAL_CONSOLE_TEXT << std::endl;
-        break;
-    }
-}
-
 
 uint64_t absolute_time_ms()
 {
