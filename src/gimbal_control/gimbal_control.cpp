@@ -10,7 +10,7 @@
 #include <termios.h>
 #include <time.h>
 #include <poll.h>
-#include<signal.h>
+#include <signal.h>
 
 /* Linux / MacOS POSIX timer headers */
 #include <sys/time.h>
@@ -28,6 +28,8 @@
 #include <thread>
 #include <mutex>
 
+#include "joystick.hpp"
+
 static constexpr uint8_t QGROUNDCONTROL_SYS_ID = 255;
 static constexpr uint8_t AUTOPILOT_SYS_ID = 1;
 
@@ -40,10 +42,13 @@ uint64_t microsSinceEpoch();
 bool setup_port();
 void set_new_datagram(char* datagram, unsigned datagram_len);
 void start_recv_thread();
+void start_joystick_thread();
+
 void stop();
 bool parse_message();
 bool send_message(const mavlink_message_t& message);
 void send_heartbeat();
+void send_do_mount_control();
 
 //  Variables
 int _fd = -1;
@@ -51,6 +56,7 @@ std::string _serial_node = "/dev/ttyUSB0";
 
 std::mutex _send_mutex;
 std::thread* _recv_thread = nullptr;
+std::thread* _joystick_thread = nullptr;
 
 bool _should_exit = false;
 bool _connected = false;
@@ -60,6 +66,16 @@ unsigned _datagram_len = 0;
 
 mavlink_message_t _last_message = {};
 mavlink_status_t _status = {};
+
+bool _joystick_connected = false;
+int _axis0_value = 0;
+int _axis1_value = 0;
+
+static constexpr int AXIS0_MAX_VALUE = 28000;
+static constexpr int AXIS0_MIN_VALUE = -28000;
+
+static constexpr int AXIS1_MAX_VALUE = 22000;
+static constexpr int AXIS1_MIN_VALUE = -24000;
 
 void sig_handler(int signum)
 {
@@ -82,11 +98,28 @@ int main(int argc, char* argv[])
 		printf("setup_port() success!\n");
 	}
 
+    send_heartbeat();
+
     start_recv_thread();
+    start_joystick_thread();
+
+    static constexpr uint64_t HEARTBEAT_INTERVAL_US = 1000000;
+    uint64_t last_heartbeat = 0;
 
     while (!_should_exit) {
-        send_heartbeat();
-        sleep(1);
+
+        auto now = microsSinceEpoch();
+
+        // Rate limit the heartbeat
+        if (now > (last_heartbeat + HEARTBEAT_INTERVAL_US)) {
+            send_heartbeat();
+            last_heartbeat = now;
+        }
+
+        // Rate limit the joystick
+        send_do_mount_control();
+
+        usleep(100000); // 10hz
     }
 }
 
@@ -135,7 +168,7 @@ bool setup_port()
 
     tc.c_cflag |= CLOCAL; // Without this a write() blocks indefinitely.
 
-    const int baudrate = B115200;
+    const int baudrate = B57600;
 
 
     if (cfsetispeed(&tc, baudrate) != 0) {
@@ -159,7 +192,7 @@ bool setup_port()
     return true;
 }
 
-void receive()
+void receive_thread_main()
 {
     std::cout << "Receive thread started!" << std::endl;
 
@@ -197,24 +230,64 @@ void receive()
             switch (_last_message.msgid) {
                 case MAVLINK_MSG_ID_HEARTBEAT:
                     if (!_connected) {
-                        std::cout << "Connected to System ID: " << int(_last_message.sysid) << "Component ID: " << (_last_message.compid) << std::endl;
+                        std::cout << "Connected to System ID: " << int(_last_message.sysid) << " Component ID: " << int(_last_message.compid) << std::endl;
                         _connected = true;
                         // TODO: connection timeout
                     }
                     break;
 
                 case MAVLINK_MSG_ID_MOUNT_ORIENTATION:
-                    std::cout << "Got MOUNT_ORIENTATION" << std::endl;
+                    // std::cout << "Got MOUNT_ORIENTATION" << std::endl;
+                    break;
+                default:
+                    // std::cout << "Got " << _last_message.msgid << std::endl;
                     break;
             }
         }
     }
 }
 
+void joystick_thread_main()
+{
+    Joystick joystick("/dev/input/js0", true); // create joystick in blocking mode
+
+    _joystick_connected = true;
+
+    while (!_should_exit) {
+
+        JoystickEvent event;
+        if (joystick.sample(&event)) {
+            if (event.isButton()) {
+                printf("Button %u is %s\n", event.number, event.value == 0 ? "up" : "down");
+
+            } else if (event.isAxis()) {
+                printf("Axis %u is at position %d\n", event.number, event.value);
+
+                switch (event.number) {
+                    case 0:
+                        _axis0_value = event.value;
+                        break;
+                    case 1:
+                        _axis1_value = event.value;
+                        break;
+                }
+            }
+        }
+
+        usleep(10000); // 10ms == 100hz
+    }
+}
+
 void start_recv_thread()
 {
     std::cout << "Starting receive thread" << std::endl;
-    _recv_thread = new std::thread(receive);
+    _recv_thread = new std::thread(receive_thread_main);
+}
+
+void start_joystick_thread()
+{
+    std::cout << "Starting joystick thread" << std::endl;
+    _joystick_thread = new std::thread(joystick_thread_main);
 }
 
 void stop()
@@ -225,6 +298,12 @@ void stop()
         _recv_thread->join();
         delete _recv_thread;
         _recv_thread = nullptr;
+    }
+
+    if (_joystick_thread) {
+        _joystick_thread->join();
+        delete _joystick_thread;
+        _joystick_thread = nullptr;
     }
 
     close(_fd);
@@ -246,6 +325,7 @@ bool parse_message()
             // And decrease the length, so we don't overshoot in the next round.
             _datagram_len -= (i + 1);
             // We have parsed one message, let's return so it can be handled.
+            // std::cout << "got mavlink message" << std::endl;
             return true;
         }
     }
@@ -279,6 +359,36 @@ bool send_message(const mavlink_message_t& message)
     return true;
 }
 
+void send_do_mount_control()
+{
+    float pitch = 0;
+    float yaw = 0;
+
+    mavlink_message_t message;
+    mavlink_msg_command_long_pack(
+        QGROUNDCONTROL_SYS_ID,
+        0,
+        &message,
+        // PAYLOAD
+        AUTOPILOT_SYS_ID,
+        // MAV_COMP_ID_GIMBAL,
+        0,
+        MAV_CMD_DO_MOUNT_CONTROL,
+        false,
+        // Params 1 - 7
+        pitch,
+        0,
+        yaw,
+        0,
+        0,
+        0,
+        MAV_MOUNT_MODE_MAVLINK_TARGETING);
+
+    if (_joystick_connected) {
+        printf("Sending MAV_CMD_DO_MOUNT_CONTROL\n");
+        send_message(message);
+    }
+}
 
 void send_heartbeat()
 {
@@ -294,7 +404,7 @@ void send_heartbeat()
         0);
 
     if (_connected) {
-        // std::cout << "sending heartbeat..." << std::endl;
+        printf("sending heartbeat\n");
         send_message(message);
     }
 }
